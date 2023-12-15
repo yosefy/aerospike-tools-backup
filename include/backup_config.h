@@ -70,7 +70,7 @@ extern "C" {
 #define DEFAULT_NODE_BACKUP_PARALLEL 16
 
 // The max number of parallel scan calls made at any one time
-#define MAX_PARALLEL 2048
+#define MAX_PARALLEL 4096
 
 /*
  * The global backup configuration and stats shared by all backup threads and the counter thread.
