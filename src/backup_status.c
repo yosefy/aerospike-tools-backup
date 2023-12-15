@@ -298,7 +298,7 @@ backup_status_init(backup_status_t* status, backup_config_t* conf)
 	as_config_init(&as_conf);
 	as_conf.conn_timeout_ms = TIMEOUT;
 	as_conf.use_services_alternate = conf->use_services_alternate;
-	as_conf.max_conns_per_node = 2048;
+	as_conf.max_conns_per_node = 4096;
 	tls_config_clone(&as_conf.tls, &conf->tls);
 
 	if (!as_config_add_hosts(&as_conf, host, (uint16_t) port)) {
