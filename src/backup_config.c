@@ -41,7 +41,7 @@ extern char *aerospike_client_version;
 // Forward Declarations.
 //
 
-static void print_version(void);
+static void print_version();
 static void usage(const char *name);
 
 //==========================================================
@@ -49,7 +49,7 @@ static void usage(const char *name);
 //
 
 int
-backup_config_init(int argc, char* argv[], backup_config_t* conf)
+backup_config_set(int argc, char* argv[], backup_config_t* conf)
 {
 	static struct option options[] = {
 
@@ -145,6 +145,7 @@ backup_config_init(int argc, char* argv[], backup_config_t* conf)
 		{ "sleep-between-retries", required_argument, NULL, COMMAND_OPT_RETRY_DELAY },
 		// support the `--retry-delay` option until a major version bump.
 		{ "retry-delay", required_argument, NULL, COMMAND_OPT_RETRY_DELAY },
+		{ "prefer-racks", required_argument, NULL, COMMAND_OPT_PREFER_RACKS },
 
 		{ "s3-region", required_argument, NULL, COMMAND_OPT_S3_REGION },
 		{ "s3-profile", required_argument, NULL, COMMAND_OPT_S3_PROFILE },
@@ -162,7 +163,8 @@ backup_config_init(int argc, char* argv[], backup_config_t* conf)
 		{ NULL, 0, NULL, 0 }
 	};
 
-	backup_config_default(conf);
+	backup_config_init(conf);
+	backup_config_set_heap_defaults(conf);
 
 	int32_t opt;
 	int64_t tmp;
@@ -377,7 +379,7 @@ backup_config_init(int argc, char* argv[], backup_config_t* conf)
 					// No password specified should
 					// force it to default password
 					// to trigger prompt.
-					conf->password = safe_strdup(DEFAULTPASSWORD);
+					conf->password = safe_strdup(DEFAULT_PASSWORD);
 				}
 			}
 			break;
@@ -665,7 +667,7 @@ backup_config_init(int argc, char* argv[], backup_config_t* conf)
 				} else {
 					// No password specified should force it to default password
 					// to trigger prompt.
-					conf->tls.keyfile_pw = safe_strdup(DEFAULTPASSWORD);
+					conf->tls.keyfile_pw = safe_strdup(DEFAULT_PASSWORD);
 				}
 			}
 			break;
@@ -729,6 +731,10 @@ backup_config_init(int argc, char* argv[], backup_config_t* conf)
 				return BACKUP_CONFIG_INIT_FAILURE;
 			}
 			conf->retry_delay = (uint32_t) tmp;
+			break;
+
+		case COMMAND_OPT_PREFER_RACKS:
+			conf->prefer_racks = strdup(optarg);
 			break;
 
 		case COMMAND_OPT_S3_REGION:
@@ -818,10 +824,6 @@ backup_config_validate(backup_config_t* conf)
 {
 	if (conf->port < 0) {
 		conf->port = DEFAULT_PORT;
-	}
-
-	if (conf->host == NULL) {
-		conf->host = safe_strdup(DEFAULT_HOST);
 	}
 
 	if (conf->ns[0] == 0 && !conf->remove_artifacts) {
@@ -923,13 +925,32 @@ backup_config_validate(backup_config_t* conf)
 }
 
 void
-backup_config_default(backup_config_t* conf)
+backup_config_set_heap_defaults(backup_config_t* conf) {
+	if (conf->host == NULL) {
+		conf->host = safe_strdup(DEFAULT_HOST);
+	}
+	
+	if (conf->password == NULL) {
+		conf->password = safe_strdup(DEFAULT_PASSWORD);
+	}
+
+	if (conf->secret_cfg.addr == NULL) {
+		conf->secret_cfg.addr = safe_strdup(DEFAULT_SECRET_AGENT_HOST);
+	}
+
+	if (conf->secret_cfg.port == NULL) {
+		conf->secret_cfg.port = safe_strdup(DEFAULT_SECRET_AGENT_PORT);
+	}
+}
+
+void
+backup_config_init(backup_config_t* conf)
 {
 	conf->host = NULL;
 	conf->port = -1;
 	conf->use_services_alternate = false;
 	conf->user = NULL;
-	conf->password = safe_strdup(DEFAULTPASSWORD);
+	conf->password = NULL;
 	conf->auth_mode = NULL;
 
 	conf->s3_region = NULL;
@@ -987,9 +1008,9 @@ backup_config_default(backup_config_t* conf)
 	conf->max_retries = 5;
 	conf->retry_delay = 0;
 
+	conf->prefer_racks = NULL;
+
 	sa_cfg_init(&conf->secret_cfg);
-	conf->secret_cfg.addr = safe_strdup(DEFAULT_SECRET_AGENT_HOST);
-	conf->secret_cfg.port = safe_strdup(DEFAULT_SECRET_AGENT_PORT);
 }
 
 void
@@ -1079,6 +1100,10 @@ backup_config_destroy(backup_config_t* conf)
 		cf_free(conf->tls_name);
 	}
 
+	if (conf->prefer_racks != NULL) {
+		cf_free(conf->prefer_racks);
+	}
+
 	tls_config_destroy(&conf->tls);
 
 	sa_config_destroy(&conf->secret_cfg);
@@ -1155,6 +1180,7 @@ backup_config_clone(backup_config_t* conf)
 	clone->partition_list = safe_strdup(conf->partition_list);
 	clone->after_digest = safe_strdup(conf->after_digest);
 	clone->filter_exp = safe_strdup(conf->filter_exp);
+	clone->prefer_racks = safe_strdup(conf->prefer_racks);
 
 	sa_config_clone(&clone->secret_cfg, &conf->secret_cfg);
 
@@ -1218,12 +1244,31 @@ backup_config_allow_uncovered_partitions(const backup_config_t* conf)
  * Print the tool's version information.
  */
 static void
-print_version(void)
+print_version()
 {
-	fprintf(stdout, "Aerospike Backup Utility\n");
-	fprintf(stdout, "Version %s\n", TOOL_VERSION);
-	fprintf(stdout, "C Client Version %s\n", aerospike_client_version);
-	fprintf(stdout, "Copyright 2015-2021 Aerospike. All rights reserved.\n");
+	char* build = NULL;
+	char* version_cpy = strdup(TOOL_VERSION);
+	char* token = strtok(version_cpy, "-");
+	char* version = token;
+
+	token = strtok(NULL, "-");
+
+	while (token != NULL) {
+		token = strtok(NULL, "-");
+
+		if (token != NULL) {
+			build = token;
+		}
+	}
+	
+	fprintf(stdout, "Aerospike Backup\n");
+	fprintf(stdout, "Version %s\n", version);
+
+	if (build != NULL) {
+		fprintf(stdout, "Build %s\n", build);
+	}
+
+	free(version_cpy);
 }
 
 /*
@@ -1462,6 +1507,8 @@ usage(const char *name)
 	fprintf(stdout, "                      The default is 5.\n");
 	fprintf(stdout, "      --sleep-between-retries <ms>\n");
 	fprintf(stdout, "                      The amount of time to sleep between retries. Default is 0.\n");
+	fprintf(stdout, "      --prefer-racks <rack id 1>[,<rack id 2>[,...]]\n");
+	fprintf(stdout, "                      A list of Aerospike Server rack IDs to prefer when reading records for a backup.\n");
 	fprintf(stdout, "      --s3-region <region>\n");
 	fprintf(stdout, "                      The S3 region that the bucket(s) exist in.\n");
 	fprintf(stdout, "      --s3-profile <profile_name>\n");

@@ -157,16 +157,25 @@ restore_status_init(restore_status_t* status, const restore_config_t* conf)
 	info_as = (aerospike*) cf_malloc(sizeof(aerospike));
 	aerospike_init(info_as, &info_as_conf);
 
+#if AS_EVENT_LIB_DEFINED
+	if (!as_event_create_loops(conf->event_loops)) {
+		err("Failed to create %d event loop(s)", conf->event_loops);
+		goto cleanup3;
+	}
+#else
+#error "Must define an event library when building"
+#endif
+
 	ver("Connecting to cluster");
 
 	if (aerospike_connect(info_as, &ae) != AEROSPIKE_OK) {
 		err("Error while connecting to %s:%d - code %d: %s at %s:%d",
 				conf->host, conf->port, ae.code, ae.message, ae.file, ae.line);
-		goto cleanup3;
+		goto cleanup4;
 	}
 
 	if (get_server_version(info_as, &status->version_info) != 0) {
-		goto cleanup4;
+		goto cleanup5;
 	}
 
 	ver("Connected to server version %u.%u.%u.%u",
@@ -180,7 +189,7 @@ restore_status_init(restore_status_t* status, const restore_config_t* conf)
 	}
 	else if (!server_has_batch_writes(info_as, &status->version_info,
 				&status->batch_writes_enabled)) {
-		goto cleanup4;
+		goto cleanup5;
 	}
 
 	if (conf->batch_size == BATCH_SIZE_UNDEFINED) {
@@ -196,19 +205,19 @@ restore_status_init(restore_status_t* status, const restore_config_t* conf)
 	}
 
 	if (!set_resource_limit(conf, status->batch_size, status->batch_writes_enabled)) {
-		goto cleanup4;
+		goto cleanup5;
 	}
 
 	if (SERVER_VERSION_BEFORE(&status->version_info, 4, 9)) {
 		err("Aerospike Server version 4.9 or greater is required to run "
 				"asrestore, but version %" PRIu32 ".%" PRIu32 " is in use.",
 				status->version_info.major, status->version_info.minor);
-		goto cleanup4;
+		goto cleanup5;
 	}
 
 	as_config as_conf;
 	if (!_init_as_config(&as_conf, conf, &info_as_conf)) {
-		goto cleanup4;
+		goto cleanup5;
 	}
 
 	if (status->batch_writes_enabled) {
@@ -226,15 +235,6 @@ restore_status_init(restore_status_t* status, const restore_config_t* conf)
 
 	status->as = cf_malloc(sizeof(aerospike));
 	aerospike_init(status->as, &as_conf);
-
-#if AS_EVENT_LIB_DEFINED
-	if (!as_event_create_loops(conf->event_loops)) {
-		err("Failed to create %d event loop(s)", conf->event_loops);
-		goto cleanup5;
-	}
-#else
-#error "Must define an event library when building"
-#endif
 
 	if (aerospike_connect(status->as, &ae) != AEROSPIKE_OK) {
 		err("Error while connecting to %s:%d - code %d: %s at %s:%d",
@@ -256,16 +256,16 @@ cleanup7:
 	aerospike_close(status->as, &ae);
 
 cleanup6:
-	as_event_close_loops();
-
-cleanup5:
 	aerospike_destroy(status->as);
 	cf_free(status->as);
 
-cleanup4:
+cleanup5:
 	if (info_as != NULL) {
 		aerospike_close(info_as, &ae);
 	}
+
+cleanup4:
+	as_event_close_loops();
 
 cleanup3:
 	if (info_as != NULL) {
@@ -425,7 +425,7 @@ _init_as_config(as_config* as_conf, const restore_config_t* conf,
 
 	char* password;
 	if (conf->user) {
-		if (strcmp(conf->password, DEFAULTPASSWORD) == 0) {
+		if (strcmp(conf->password, DEFAULT_PASSWORD) == 0) {
 			password = getpass("Enter Password: ");
 		}
 		else {
@@ -443,7 +443,7 @@ _init_as_config(as_config* as_conf, const restore_config_t* conf,
 	}
 	else if (conf->tls.keyfile && conf->tls.keyfile_pw) {
 		char* keyfile_pw;
-		if (strcmp(conf->tls.keyfile_pw, DEFAULTPASSWORD) == 0) {
+		if (strcmp(conf->tls.keyfile_pw, DEFAULT_PASSWORD) == 0) {
 			keyfile_pw = getpass("Enter TLS-Keyfile Password: ");
 		}
 		else {

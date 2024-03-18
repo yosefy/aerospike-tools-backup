@@ -217,7 +217,7 @@ backup_status_init(backup_status_t* status, backup_config_t* conf)
 
 		if (!cf_b64_validate_and_decode(conf->filter_exp, b64_len,
 					expr->packed, &expr->packed_sz)) {
-			err("Invalide base64 encoded string: %s", conf->filter_exp);
+			err("Invalid base64 encoded string: %s", conf->filter_exp);
 			cf_free(expr);
 			goto cleanup2;
 		}
@@ -320,7 +320,7 @@ backup_status_init(backup_status_t* status, backup_config_t* conf)
 
 	char* password;
 	if (conf->user) {
-		if (strcmp(conf->password, DEFAULTPASSWORD) == 0) {
+		if (strcmp(conf->password, DEFAULT_PASSWORD) == 0) {
 			password = getpass("Enter Password: ");
 		}
 		else {
@@ -335,7 +335,7 @@ backup_status_init(backup_status_t* status, backup_config_t* conf)
 
 	if (conf->tls.keyfile && conf->tls.keyfile_pw) {
 		char* tls_keyfile_pw;
-		if (strcmp(conf->tls.keyfile_pw, DEFAULTPASSWORD) == 0) {
+		if (strcmp(conf->tls.keyfile_pw, DEFAULT_PASSWORD) == 0) {
 			tls_keyfile_pw = getpass("Enter TLS-Keyfile Password: ");
 		}
 		else {
@@ -347,6 +347,35 @@ backup_status_init(backup_status_t* status, backup_config_t* conf)
 		if (!tls_read_password(tls_keyfile_pw, &as_conf.tls.keyfile_pw)) {
 			goto cleanup2;
 		}
+	}
+
+	if (conf->prefer_racks) {
+		as_conf.rack_aware = true;
+		status->policy->replica = AS_POLICY_REPLICA_PREFER_RACK;
+
+		as_vector rackids;
+		as_vector_init(&rackids, sizeof(char*), 1);
+
+		char* racks_clone = strdup(conf->prefer_racks);
+		split_string(racks_clone, ',', true, &rackids);
+
+		for (uint32_t i = 0; i < rackids.size; i++) {
+			char* id_str = (char*) as_vector_get_ptr(&rackids, i);
+			int64_t id = 0;
+			if (!better_atoi(id_str, &id) || id < 0 || id > MAX_RACKID) {
+				err("Invalid rack id %s", id_str);
+
+				cf_free(racks_clone);
+				as_vector_destroy(&rackids);
+
+				goto cleanup2;
+			}
+
+			as_config_add_rack_id(&as_conf, (int)id);
+		}
+
+		cf_free(racks_clone);
+		as_vector_destroy(&rackids);
 	}
 
 	status->as = cf_malloc(sizeof(aerospike));
@@ -1328,7 +1357,7 @@ static bool
 ns_count_callback(void *context_, const char *key, const char *value)
 {
 	ns_count_context *context = (ns_count_context *)context_;
-	int64_t repl_factor;
+	int64_t effective_repl_factor;
 	int64_t object_count;
 
 	if (strcmp(key, "objects") == 0) {
@@ -1341,13 +1370,13 @@ ns_count_callback(void *context_, const char *key, const char *value)
 		return true;
 	}
 
-	if (strcmp(key, "replication-factor") == 0) {
-		if (!better_atoi(value, &repl_factor) || repl_factor < 0 || repl_factor > 100) {
-			err("Invalid replication factor %s", value);
+	if (strcmp(key, "effective_replication_factor") == 0) {
+		if (!better_atoi(value, &effective_repl_factor) || effective_repl_factor < 0 || effective_repl_factor > 256) {
+			err("Invalid effective replication factor %s", value);
 			return false;
 		}
 
-		context->factor = (uint32_t) repl_factor;
+		context->factor = (uint32_t) effective_repl_factor;
 		return true;
 	}
 
@@ -1449,7 +1478,7 @@ get_object_count(aerospike *as, const char *namespace, as_vector* set_list,
 	ver("Getting cluster object count");
 
 	*obj_count = 0;
-	uint32_t repl_factor = 0;
+	uint32_t effective_repl_factor = 0;
 
 	size_t value_size = sizeof "namespace/" - 1 + strlen(namespace) + 1;
 	char value[value_size];
@@ -1471,7 +1500,7 @@ get_object_count(aerospike *as, const char *namespace, as_vector* set_list,
 			return false;
 		}
 		if (ns_context.factor == -1u) {
-			err("Failed to find replication_factor field in namespace info result");
+			err("Failed to find effective_replication_factor field in namespace info result");
 			return false;
 		}
 
@@ -1496,20 +1525,26 @@ get_object_count(aerospike *as, const char *namespace, as_vector* set_list,
 		}
 
 		if (i == 0) {
-			repl_factor = ns_context.factor;
+			effective_repl_factor = ns_context.factor;
 		}
-		else if (ns_context.factor != repl_factor) {
-			err("Inconsitent replication factor across nodes (found two nodes "
+		else if (ns_context.factor != effective_repl_factor) {
+			inf("Warning: Inconsistent effective replication factor across nodes. " 
+					"Estimate size may be inaccurate. (found two nodes "
 					"with replication factors %" PRIu32 " and %" PRIu32 ")",
-					ns_context.factor, repl_factor);
-			return false;
+					ns_context.factor, effective_repl_factor);
 		}
 
 		inf("%-20s%-15" PRIu64 "%-15d", (*node_names)[i], count, ns_context.factor);
 		*obj_count += count;
 	}
 
-	*obj_count /= repl_factor;
+	// if effective replication factor is 0 set it to 1 to prevent division by 0
+	if (effective_repl_factor == 0) {
+		inf("Warning: effective replication factor is 0");
+		effective_repl_factor = 1;
+	}
+
+	*obj_count /= effective_repl_factor;
 
 	return true;
 }

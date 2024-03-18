@@ -59,7 +59,7 @@
 // Globals.
 //
 
-char *DEFAULTPASSWORD = "SomeDefaultRandomPassword";
+char *DEFAULT_PASSWORD = "SomeDefaultRandomPassword";
 
 
 //=========================================================
@@ -124,6 +124,8 @@ config_from_file(void *c, const char *instance, const char *fname,
 
 		if (is_backup) {
 
+			backup_config_set_heap_defaults((backup_config_t*)c);
+
 			sa_cfg* secret_cfg = &((backup_config_t*)c)->secret_cfg;
 			if (! config_secret_agent(config_table, secret_cfg, instance, errbuf)) {
 				status = false;
@@ -140,6 +142,8 @@ config_from_file(void *c, const char *instance, const char *fname,
 				status = false;
 			}
 		} else {
+
+			restore_config_set_heap_defaults((restore_config_t*)c);
 
 			sa_cfg* secret_cfg = &((restore_config_t*)c)->secret_cfg;
 			if (! config_secret_agent(config_table, secret_cfg, instance, errbuf)) {
@@ -1071,6 +1075,9 @@ config_backup(toml_table_t *config_table, backup_config_t *c, const char *instan
 			} else {
 				status = false;
 			}
+
+		} else if (! strcasecmp("prefer-racks", name)) {
+			status = config_str(config_value, (void*)&c->prefer_racks, override);
 
 		} else if (! strcasecmp("s3-region", name)) {
 			status = config_str(config_value, (void*)&c->s3_region, override);
