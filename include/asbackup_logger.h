@@ -38,6 +38,11 @@
 class AsbackupLogger : public Aws::Utils::Logging::LogSystemInterface {
 public:
 
+	// to fix error in compilation provided by copilot
+	void vaLog(Aws::Utils::Logging::LogLevel logLevel, const char* tag, const char* formatStr, va_list args) override {
+        // Implement the function here.
+    	}
+
 	AsbackupLogger(Aws::Utils::Logging::LogLevel logLevel);
 
 	virtual ~AsbackupLogger();
